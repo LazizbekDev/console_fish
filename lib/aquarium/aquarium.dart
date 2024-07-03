@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'dart:isolate';
@@ -8,6 +9,9 @@ import 'package:aquarium/fish/fish.dart';
 import 'package:aquarium/fish/fish_action.dart';
 import 'package:aquarium/fish/fish_request.dart';
 import 'package:aquarium/fish/genders.dart';
+import 'package:aquarium/shark/shark.dart';
+import 'package:aquarium/shark/shark_action.dart';
+import 'package:aquarium/shark/shark_request.dart';
 import 'package:aquarium/utils/fish_names.dart';
 import 'package:uuid/uuid.dart';
 
@@ -17,6 +21,7 @@ class Aquarium {
   final ReceivePort _mainReceivePort = ReceivePort();
   int _newFishCount = 0;
   int _diedFishCount = 0;
+  int _sharkTargets = 0;
 
   void runApp() {
     stdout.write("Enter initial fish count: ");
@@ -57,6 +62,45 @@ class Aquarium {
             break;
           default:
             break;
+        }
+      } else if (value is SharkRequest) {
+        switch (value.action) {
+          case SharkAction.killIsolate:
+            print("ISOLATE KILLED");
+            break;
+          case SharkAction.start:
+            createShark();
+          case SharkAction.kill:
+            hunt();
+            _sharkTargets++;
+            break;
+          case SharkAction.stop:
+            print('SHARK KILLED A FISH');
+            break;
+          case SharkAction.sendPort:
+            print('SHARK SENDPORT');
+        }
+      }
+    });
+  }
+
+  int getFishCount() {
+    return _newFishCount;
+  }
+
+  void hunt() {
+    final randomHuntInterval = Duration(seconds: _random.nextInt(10) + 5);
+    Timer.periodic(randomHuntInterval, (timer) {
+      if (_fishList.length <= 10) {
+        timer.cancel();
+      } else {
+        if (_fishList.isNotEmpty) {
+          final idList = _fishList.keys.toList();
+          final target = idList[_random.nextInt(idList.length)];
+          _fishList.remove(target);
+          print("Shark killed $target");
+          _diedFishCount++;
+          print(toString());
         }
       }
     });
@@ -133,10 +177,25 @@ class Aquarium {
     );
     _newFishCount++;
     print(toString());
+
+    if (_fishList.length > 10) {
+      // createShark();
+      // SharkRequest(action: SharkAction.kill);
+      hunt();
+      _sharkTargets++;
+    }
+  }
+
+  void createShark() async {
+    final shark = Shark(_mainReceivePort.sendPort);
+    await Isolate.spawn(Shark.run, shark);
+    SharkRequest(action: SharkAction.start);
   }
 
   void closeAquarium() {
-// TODO: need add print console and close app
+    print(
+        "there's no fishes in aquarium. shark have eaten $_sharkTargets fishes");
+    exit(0);
   }
 
   @override
