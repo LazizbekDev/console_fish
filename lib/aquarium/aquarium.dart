@@ -11,7 +11,6 @@ import 'package:aquarium/fish/fish_request.dart';
 import 'package:aquarium/fish/genders.dart';
 import 'package:aquarium/shark/shark.dart';
 import 'package:aquarium/shark/shark_action.dart';
-import 'package:aquarium/shark/shark_request.dart';
 import 'package:aquarium/utils/fish_names.dart';
 import 'package:uuid/uuid.dart';
 
@@ -19,15 +18,20 @@ class Aquarium {
   final Random _random = Random();
   final LinkedHashMap<String, FishModel> _fishList = LinkedHashMap();
   final ReceivePort _mainReceivePort = ReceivePort();
+  SendPort? sharkSendPort;
+  Isolate? sharkIsolate;
   int _newFishCount = 0;
   int _diedFishCount = 0;
   int _sharkTargets = 0;
+  static int limitFishCount = 0;
 
   void runApp() {
     stdout.write("Enter initial fish count: ");
     final int count = int.tryParse(stdin.readLineSync() ?? '0') ?? 0;
+    limitFishCount = count;
     portListener();
     initial(count);
+    createShark();
   }
 
   void portListener() {
@@ -51,59 +55,66 @@ class Aquarium {
             _diedFishCount++;
             break;
           case FishAction.killIsolate:
-            final model = _fishList[value.fishId];
-            model?.isolate.kill(
-              priority: Isolate.immediate,
-            );
-            _fishList.remove(value.fishId);
-            print(toString());
+            death(value.fishId, false);
+
+            _fishCount();
+            break;
           case FishAction.needPopulate:
             population(value.fishId, value.args as Genders);
             break;
           default:
             break;
         }
-      } else if (value is SharkRequest) {
-        switch (value.action) {
-          case SharkAction.killIsolate:
-            print("ISOLATE KILLED");
-            break;
-          case SharkAction.start:
-            createShark();
-          case SharkAction.kill:
-            hunt();
-            _sharkTargets++;
-            break;
-          case SharkAction.stop:
-            print('SHARK KILLED A FISH');
-            break;
-          case SharkAction.sendPort:
-            print('SHARK SENDPORT');
-        }
+      } else if (value is SendPort) {
+        sharkSendPort = value;
+        _sharkTargets = _fishList.length;
+        _fishCount();
+      } else if (value == SharkAction.kill) {
+        _huntFish();
       }
     });
   }
 
-  int getFishCount() {
-    return _newFishCount;
-  }
-
-  void hunt() {
-    final randomHuntInterval = Duration(seconds: _random.nextInt(10) + 5);
-    Timer.periodic(randomHuntInterval, (timer) {
-      if (_fishList.length <= 10) {
-        timer.cancel();
+  void _fishCount() {
+    if (sharkSendPort != null) {
+      final fishCount = _fishList.length;
+      if (fishCount > limitFishCount) {
+        sharkSendPort?.send({
+          'action': SharkAction.start,
+          'fishCount': fishCount,
+        });
       } else {
-        if (_fishList.isNotEmpty) {
-          final idList = _fishList.keys.toList();
-          final target = idList[_random.nextInt(idList.length)];
-          _fishList.remove(target);
-          print("Shark killed $target");
-          _diedFishCount++;
-          print(toString());
-        }
+        sharkSendPort?.send({'action': SharkAction.stop});
       }
-    });
+    }
+  }
+
+  Future<void> createShark() async {
+    final shark = Shark(_mainReceivePort.sendPort);
+    sharkIsolate = await Isolate.spawn(Shark.run, shark);
+  }
+
+  void _huntFish() {
+    if (_fishList.isNotEmpty) {
+      final randomFishId =
+          _fishList.keys.elementAt(_random.nextInt(_fishList.length));
+      death(randomFishId, true);
+      _diedFishCount++;
+      _fishCount();
+    }
+  }
+
+  void death(value, bool isShark) {
+    final model = _fishList[value];
+    model?.sendPort?.send(FishAction.close);
+    model?.isolate.kill(
+      priority: Isolate.immediate,
+    );
+    _fishList.remove(value);
+    print(toString());
+    if (isShark) {
+      print('Shark ate id $value gender ${model?.genders}\n');
+    }
   }
 
   void population(String fishId, Genders gender) {
@@ -177,19 +188,6 @@ class Aquarium {
     );
     _newFishCount++;
     print(toString());
-
-    if (_fishList.length > 10) {
-      // createShark();
-      // SharkRequest(action: SharkAction.kill);
-      hunt();
-      _sharkTargets++;
-    }
-  }
-
-  void createShark() async {
-    final shark = Shark(_mainReceivePort.sendPort);
-    await Isolate.spawn(Shark.run, shark);
-    SharkRequest(action: SharkAction.start);
   }
 
   void closeAquarium() {
